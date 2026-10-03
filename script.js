@@ -216,12 +216,42 @@ if (browseQuery) {
   }
 
   async function fetchCars(query) {
-    const params = carParams(query);
-    const response = await fetch(`${CAR_API}?${params}`);
+    try {
+      const params = carParams(query);
+      const response = await fetch(`${CAR_API}?${params}`);
+      if (response.ok) {
+        const payload = await response.json();
+        const listings = Array.isArray(payload.listings) ? payload.listings : [];
+        const cars = listings.map(normalizeCar).filter((car) => car.price > 0);
+        if (cars.length) return cars;
+      }
+    } catch (error) {
+      // GitHub Pages cannot proxy the car API, so the saved listings are used.
+    }
+    const saved = await loadSavedCars();
+    return filterSavedCars(saved, query);
+  }
+
+  async function loadSavedCars() {
+    if (loadSavedCars.cache) return loadSavedCars.cache;
+    const response = await fetch("data/cars.json");
     if (!response.ok) throw new Error("Request failed");
-    const payload = await response.json();
-    const listings = Array.isArray(payload.listings) ? payload.listings : [];
-    return listings.map(normalizeCar).filter((car) => car.price > 0);
+    loadSavedCars.cache = await response.json();
+    return loadSavedCars.cache;
+  }
+
+  function filterSavedCars(cars, query) {
+    const params = carParams(query);
+    const make = (params.get("make") || "").toLowerCase();
+    const model = (params.get("model") || "").replace(/-/g, " ").toLowerCase();
+    const year = Number(params.get("year")) || 0;
+    return cars.filter((car) => {
+      if (car.price < priceMin || car.price > priceMax) return false;
+      if (make && (car.make || "").toLowerCase() !== make) return false;
+      if (model && !`${car.model} ${car.title}`.toLowerCase().includes(model)) return false;
+      if (year && car.year !== year) return false;
+      return true;
+    }).slice(0, 18);
   }
 
   function carParams(query) {
