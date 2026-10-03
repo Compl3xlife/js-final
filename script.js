@@ -1,4 +1,7 @@
 const CAR_API = "/api/cars";
+const OMDB_URL = "https://www.omdbapi.com/";
+const OMDB_KEY = "4cfe7eb4";
+const MOVIE_LIMIT = 6;
 const PRICE_MAX = 100000;
 const MAKES = {
   acura: "acura",
@@ -165,7 +168,7 @@ if (browseQuery) {
     setLoading(true);
     catalogEl.replaceChildren(loadingNode());
     try {
-      const found = await fetchCars(query);
+      const found = query.toLowerCase() === "fast" ? await fetchFastMovies() : await fetchCars(query);
       if (token !== requestToken) return;
       catalog = found;
       render();
@@ -176,6 +179,40 @@ if (browseQuery) {
     } finally {
       if (token === requestToken) setLoading(false);
     }
+  }
+
+  async function fetchFastMovies() {
+    const matches = [];
+    for (let page = 1; page <= 3 && matches.length < MOVIE_LIMIT; page += 1) {
+      const url = new URL(OMDB_URL);
+      url.searchParams.set("apikey", OMDB_KEY);
+      url.searchParams.set("s", "fast");
+      url.searchParams.set("type", "movie");
+      url.searchParams.set("page", String(page));
+      const response = await fetch(url);
+      if (!response.ok) throw new Error("Request failed");
+      const payload = await response.json();
+      const results = Array.isArray(payload.Search) ? payload.Search : [];
+      results.forEach((item) => {
+        const title = item.Title || "";
+        if (matches.length < MOVIE_LIMIT && title.toLowerCase().startsWith("fast")) matches.push(normalizeMovie(item));
+      });
+      if (payload.Response === "False" || results.length < 10) break;
+    }
+    return matches;
+  }
+
+  function normalizeMovie(item) {
+    const yearMatch = String(item.Year || "").match(/\d{4}/);
+    return {
+      kind: "movie",
+      id: item.imdbID,
+      title: item.Title || "Untitled",
+      year: yearMatch ? Number(yearMatch[0]) : 0,
+      yearLabel: item.Year || "",
+      photo: item.Poster && item.Poster !== "N/A" ? item.Poster : "",
+      price: 0
+    };
   }
 
   async function fetchCars(query) {
@@ -260,6 +297,7 @@ if (browseQuery) {
   }
 
   function inPriceRange(car) {
+    if (car.kind === "movie") return true;
     return car.price >= priceMin && car.price <= priceMax;
   }
 
@@ -290,18 +328,22 @@ if (browseQuery) {
     const title = scoped(document.createElement("div"));
     title.className = "title";
     title.textContent = car.title || "Untitled";
-    bot.append(
-      title,
-      infoRow("tachometer-alt", car.miles ? `${formatNum(car.miles)} mi` : "Mileage unavailable"),
-      infoRow("car-side", car.body || "Body unknown"),
-      infoRow("cogs", car.transmission || "Transmission unknown")
-    );
+    if (car.kind === "movie") {
+      bot.append(title, infoRow("car-side", car.yearLabel || "Year unknown"), infoRow("cogs", "Movie"));
+    } else {
+      bot.append(
+        title,
+        infoRow("tachometer-alt", car.miles ? `${formatNum(car.miles)} mi` : "Mileage unavailable"),
+        infoRow("car-side", car.body || "Body unknown"),
+        infoRow("cogs", car.transmission || "Transmission unknown")
+      );
+    }
     const foot = document.createElement("div");
     foot.className = "flex justify-between";
     foot.style.marginTop = "30px";
     const price = scoped(document.createElement("h2"));
     price.className = "price";
-    if (car.previous) {
+    if (car.kind !== "movie" && car.previous) {
       const was = scoped(document.createElement("span"));
       was.className = "prev";
       was.textContent = `$${formatNum(car.previous)}`;
@@ -309,7 +351,7 @@ if (browseQuery) {
     }
     const current = scoped(document.createElement("span"));
     current.className = "curr";
-    current.textContent = `$${formatNum(car.price)}`;
+    current.textContent = car.kind === "movie" ? (car.yearLabel || "") : `$${formatNum(car.price)}`;
     price.append(current);
     foot.append(price);
     bot.append(foot);
@@ -366,6 +408,27 @@ if (browseQuery) {
     const body = wrapper.querySelector(".el-dialog__body");
     body.style.whiteSpace = "pre-line";
     wrapper.querySelector(".el-dialog__title").textContent = car.title;
+    if (car.kind === "movie") {
+      body.textContent = car.yearLabel || "";
+      try {
+        const url = new URL(OMDB_URL);
+        url.searchParams.set("apikey", OMDB_KEY);
+        url.searchParams.set("i", car.id);
+        url.searchParams.set("plot", "short");
+        const response = await fetch(url);
+        if (!response.ok) return;
+        const details = await response.json();
+        if (details.Response === "False") return;
+        const facts = [details.Year, details.Runtime, details.Genre, details.imdbRating && details.imdbRating !== "N/A" ? `${details.imdbRating} / 10` : ""]
+          .filter((part) => part && part !== "N/A")
+          .join(" · ");
+        const plot = details.Plot && details.Plot !== "N/A" ? details.Plot : "";
+        body.textContent = [facts, plot].filter(Boolean).join("\n\n");
+      } catch (error) {
+        return;
+      }
+      return;
+    }
     const dealer = [car.dealer.name, car.dealer.city, car.dealer.state].filter(Boolean).join(", ");
     const lines = [
       `$${formatNum(car.price)}`,
